@@ -18,7 +18,7 @@ EKS 기반 [**aws-samples / awsome-ai-gateway**](https://github.com/aws-samples/
 ## 목차
 
 1. [Upstream 대비 변경](#upstream-대비-변경)
-2. [ECS 아키텍처 (이 레포)](#ecs-아키텍처-이-레포) · [Operation Architecture](#operation-architecture)
+2. [ECS 아키텍처](#ecs-아키텍처-이-레포) — [트래픽](#1-트래픽-경계-클라이언트--엣지--ecs) · [워크로드](#2-ecs-워크로드) · [데이터·AI](#3-데이터-플레인--ai-백엔드)
 3. [설치 Quick Guide](#설치-quick-guide) · [스택 삭제](#35-스택-삭제)
 4. [일상 운영](#일상-운영)
 5. [Observability](#observability)
@@ -70,94 +70,104 @@ EKS 기반 [**aws-samples / awsome-ai-gateway**](https://github.com/aws-samples/
 
 ### Operation Architecture
 
+한 장에 다 넣으면 렌더가 깨지므로 **트래픽 / 컴퓨트 / 데이터·AI** 세 장으로 나눕니다.
+
+#### 1) 트래픽 경계 (클라이언트 → 엣지 → ECS)
+
 ```mermaid
-flowchart TB
-  subgraph Clients["Clients"]
-    CC[Claude Code / Codex / Cowork]
-    Browser[Admin UI browser]
-    CLI[gateway-cli]
-  end
+flowchart LR
+  CC[Claude Code / Codex / Cowork]
+  Browser[Admin UI]
+  CLI[gateway-cli]
 
-  subgraph Edge["Public edge"]
-    ALBgw[ALB gateway · SSE]
-    ALBui[ALB admin-ui]
-    ALBapi[ALB admin-api · SSE]
-    APIGW[API Gateway REST · idle ~29s]
-  end
+  ALBgw[ALB gateway]
+  ALBui[ALB admin-ui]
+  ALBapi[ALB admin-api]
+  APIGW[API Gateway]
 
-  subgraph ECS["ECS Fargate"]
-    GW[gateway-proxy]
-    API[admin-api]
-    UI[admin-ui]
-    SCH[scheduler]
-    CR[cost-recorder-worker]
-    NW[notification-worker]
-  end
+  GW[gateway-proxy]
+  UI[admin-ui]
+  API[admin-api]
 
-  subgraph Data["Data plane · installer.py"]
-    VPC[VPC / NAT]
-    Aurora[(Aurora Serverless v2)]
-    Valkey[(ElastiCache Valkey)]
-    Cognito[Cognito]
-    SM[Secrets Manager]
-  end
-
-  subgraph AI["AWS AI"]
-    Bedrock[Bedrock / Mantle]
-    AgentCore[AgentCore Runtime · BI chat]
-  end
-
-  CC -->|ANTHROPIC_BASE_URL| ALBgw
-  CLI -->|OIDC + VK exchange| APIGW
-  Browser --> ALBui
-  Browser -->|BI chat SSE| ALBapi
-  APIGW -->|VPC Link| ALBapi
-
-  ALBgw --> GW
-  ALBui --> UI
-  ALBapi --> API
-
-  GW --> Bedrock
-  API --> AgentCore
+  CC -->|ANTHROPIC_BASE_URL SSE| ALBgw --> GW
+  Browser --> ALBui --> UI
+  Browser -->|BI chat SSE| ALBapi --> API
+  CLI -->|OIDC + VK exchange| APIGW -->|VPC Link| ALBapi
   UI -->|Cloud Map| API
-  SCH --> Aurora
-  CR --> Aurora
-  NW --> Aurora
-  GW --> Aurora
-  GW --> Valkey
-  API --> Aurora
-  API --> Valkey
-  API --> Cognito
-  GW --> SM
-  API --> SM
-
-  VPC -.-> ECS
-  Cognito -.-> CLI
 ```
-
-### 트래픽 경계 (ECS 고정)
 
 | 경로 | 진입점 | 이유 |
 |------|--------|------|
-| gateway-proxy 추론 / SSE | **gateway ALB → ECS** | API GW idle ~29s → SSE 불가 |
-| admin-api REST (VK exchange 등) | **API GW → VPC Link → admin-api ALB → ECS** | REST만 |
-| admin-api BI chat SSE | **admin-api ALB** (API GW 금지) | SSE |
-| admin-ui | **admin-ui ALB** | Next.js |
-| workers / scheduler | private ECS only | 외부 노출 없음 |
+| 추론 / SSE | **gateway ALB** | API GW idle ~29s → SSE 불가 |
+| admin-api REST (VK 등) | **API GW → VPC Link → ALB** | REST만 |
+| BI chat SSE | **admin-api ALB** | SSE (API GW 금지) |
+| Admin UI | **admin-ui ALB** | Next.js |
 
-### 워크로드
+#### 2) ECS 워크로드
 
-| 서비스 / 컴포넌트 | 역할 |
-|-------------------|------|
-| `gateway-proxy` | Messages API 프록시 · Bedrock 호출 · Virtual Key 검증 |
-| `admin-api` | REST · Cognito sync · BI chat SSE · 예산/팀 정책 |
-| `admin-ui` | 운영 대시보드 (허용 모델 · routing · 예산) |
-| `scheduler` | ROI·VK 만료 (admin-api 이미지) |
-| `cost-recorder-worker` / `notification-worker` | 비용 기록 · 알림 |
-| `migration` | Alembic RunTask (`installer.py migrate`) |
-| `admin-chat-agent` | AgentCore Runtime (ECS 외, `chat-agent`) |
+```mermaid
+flowchart TB
+  subgraph public [ALB-attached]
+    GW[gateway-proxy]
+    API[admin-api]
+    UI[admin-ui]
+  end
 
-배포 계층: `소스 → docker build (linux/amd64) → ECR → installer.py → ECS/ALB/API GW` (+ VPC/Aurora/Valkey/Cognito).
+  subgraph private [No public edge]
+    SCH[scheduler]
+    CR[cost-recorder-worker]
+    NW[notification-worker]
+    MIG[migration RunTask]
+  end
+
+  subgraph external [Outside ECS]
+    AC[AgentCore chat-agent]
+  end
+
+  UI -.->|admin-api.llm-gateway.local| API
+  API -.->|InvokeAgentRuntime| AC
+```
+
+| 서비스 | 역할 |
+|--------|------|
+| `gateway-proxy` | Messages API · Bedrock · VK 검증 |
+| `admin-api` | REST · Cognito · BI SSE · 예산/팀 |
+| `admin-ui` | 허용 모델 · routing · 예산 대시보드 |
+| `scheduler` | ROI · VK 만료 (admin-api 이미지) |
+| `cost-recorder-worker` / `notification-worker` | 비용 · 알림 |
+| `migration` | Alembic (`installer.py migrate`) |
+| `admin-chat-agent` | AgentCore Runtime (`chat-agent`) |
+
+#### 3) 데이터 플레인 · AI 백엔드
+
+```mermaid
+flowchart LR
+  GW[gateway-proxy]
+  API[admin-api]
+  Workers[scheduler / workers]
+
+  Aurora[(Aurora)]
+  Valkey[(Valkey)]
+  SM[Secrets Manager]
+  Cognito[Cognito]
+  Bedrock[Bedrock / Mantle]
+  AgentCore[AgentCore Runtime]
+
+  GW --> Aurora
+  GW --> Valkey
+  GW --> SM
+  GW --> Bedrock
+
+  API --> Aurora
+  API --> Valkey
+  API --> SM
+  API --> Cognito
+  API --> AgentCore
+
+  Workers --> Aurora
+```
+
+배포 계층: `소스 → docker build linux/amd64 → ECR → installer.py → ECS/ALB/API GW` (+ VPC/Aurora/Valkey/Cognito).
 
 ---
 
