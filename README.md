@@ -29,7 +29,8 @@ EKS 기반 [**aws-samples / awsome-ai-gateway**](https://github.com/aws-samples/
    - [gateway-cli / Claude Code / Codex / Cowork](#84-공통--gateway-cli-로그인)
    - [원복 · FAQ · 트러블슈팅](#89-원복--faq)
    - [모델 선택](#812-모델-선택)
-9. [관련 문서](#관련-문서)
+9. [비용 검토](#비용-검토)
+10. [관련 문서](#관련-문서)
 
 ---
 
@@ -949,12 +950,80 @@ curl -s "$ADMIN_API_URL/health"
 
 ---
 
+## 비용 검토
+
+기준: 현재 installer 기본 배포 ([resource-list.md](resource-list.md)) · **ap-northeast-2** · `project=llm-gateway` · `environment=dev` · **24/7**.  
+요금은 On-Demand 대략치이며(2026년 공개 단가 기준), 리전·할인·실트래픽에 따라 달라집니다. **Bedrock/Mantle 토큰 요금은 인프라와 별도**입니다.
+
+### 현재 설치 스펙 (과금 대상)
+
+| 구성 | resource-list 기준 | 비고 |
+|------|-------------------|------|
+| ECS Fargate | 서비스 6 · 합계 **~4 vCPU / 8 GB** | private subnet · `AssignPublicIp=DISABLED` → **NAT Gateway 1** 필요 |
+| | gateway-proxy · admin-api: 각 1024/2048 | desired 1 (gateway는 autoscaling max 3) |
+| | admin-ui · scheduler · cost-recorder · notification: 각 512/1024 | |
+| ALB | **3** × internet-facing HTTP :80 | gw/ui idle 120–600s · LCU는 트래픽에 비례 |
+| API Gateway | HTTP API 1 + VPC Link | REST만 (SSE는 ALB) |
+| Aurora | Serverless v2 · **0.5–4 ACU** · PostgreSQL 16 · Single-AZ | 백업 7일 |
+| ElastiCache | Valkey **cache.t4g.small** × 1 | TLS + AUTH |
+| Cognito | User Pool 1 | MAU 소량 |
+| Secrets Manager | **3–4** secrets | app / db / redis (+ Aurora master) |
+| CloudWatch Logs | `/ecs/llm-gateway-*-ecs` | 보존 ~7일 (dev) · Container Insights |
+| VPC / NAT / EIP | 전용 VPC + **NAT 1** | LiteLLM 스택 대비 고정비의 큰 부분 |
+| IAM / SG / Cloud Map / ECS Cluster | — | 요금 없음 (또는 무시 가능) |
+| Chat Agent | 기본 **비활성** | 켜면 Lambda·S3·AgentCore 추가 |
+
+### 월간 인프라 추정 (USD)
+
+가정: 730시간/월. Fargate·ALB·NAT 단가는 공개가에 가깝게 두고, ap-northeast-2는 유사~소폭 상향으로 봄.
+
+| 항목 | 산식 (대략) | 월 추정 |
+|------|-------------|---------|
+| **ECS Fargate** | 4 vCPU × $0.04048/h + 8 GB × $0.004445/h × 730h | **~$144** |
+| **NAT Gateway** | $0.045/h × 730h ≈ $33 + 데이터 처리 (저트래픽) | **~$35–45** |
+| **ALB ×3** | 3 × ($0.0225/h × 730h ≈ $16) + LCU (저트래픽 ~$4–8×3) | **~$60–75** |
+| **Aurora Serverless v2** | 0.5 ACU 유휴 ≈ $40–50 · 부하 시 ACU 상승 | **~$45–90** |
+| **ElastiCache Valkey** | cache.t4g.small | **~$15–20** |
+| **API Gateway HTTP** | 요청량 소량 | **~$1–5** |
+| **Cognito** | MAU 소량 | **~$0–5** |
+| **Secrets Manager** | 3–4 × ~$0.40 | **~$1–2** |
+| **CloudWatch Logs** | 수집·보관 + Insights | **~$5–15** |
+| **EIP / 데이터 전송** | NAT EIP + ALB→인터넷 소량 | **~$4–10** |
+| **합계 (인프라)** | | **약 $310–410 / 월** |
+
+저트래픽 개발·데모 기준 **~$340/월** 전후가 현실적입니다.  
+[resource-list.md](resource-list.md)의 밴드(~$310–410)와 비교하면, Fargate 4 vCPU를 풀로 돌리는 현재 구성은 그 밴드의 **중하단~중앙**에 해당합니다.  
+단일 LiteLLM 스택(~$85/월) 대비 **약 4배** 수준이며, 차이의 대부분은 **NAT + ALB×3 + Aurora + Valkey + Fargate 다중 서비스**입니다.
+
+### 비용이 커지는 경우
+
+| 요인 | 영향 |
+|------|------|
+| gateway `replicas` / `autoscalingMax` 상향 | Fargate 비용 거의 선형 증가 |
+| ALB 트래픽·LCU 증가 (SSE 장시간 연결) | ALB 수~수십 달러 추가 가능 |
+| Aurora ACU 상한 도달 / 상시 부하 | DB가 인프라 비중을 크게 키움 (4 ACU면 유휴 대비 수배) |
+| Multi-AZ NAT / Valkey HA | AZ당 NAT ~$32+/월 + 캐시 배증 |
+| **`enableChatAgent: true`** | Lambda·S3·AgentCore Runtime·추가 IAM |
+| **Bedrock / Mantle 추론** | 토큰·모델별 과금 — Haiku는 저렴, Sonnet/Opus·Mantle은 사용량에 따라 **인프라보다 커질 수 있음** |
+
+### 절감 팁
+
+- 쓰지 않을 때 `uninstaller.py --yes`로 전체 스택 삭제 (NAT·ALB·Aurora가 가장 비쌈)
+- 개발용은 gateway `replicas: 1` 유지, 로그 보존 짧게 (dev 7일)
+- chat-agent는 필요할 때만 활성화
+- 추론 비용은 Admin UI 사용량·저가 모델·예산/라우팅 정책으로 통제
+
+상세 리소스 목록·삭제 순서: [resource-list.md](resource-list.md) · [deployment/ecs/installer.md](deployment/ecs/installer.md)
+
+---
+
 ## 관련 문서
 
 | | |
 |--|--|
 | Upstream 제품 README | [awsome-ai-gateway/README.md](https://github.com/aws-samples/sample-agentic-ai-acceleration-kr/blob/main/projects/awsome-ai-gateway/README.md) |
 | Upstream 아키텍처 상세 | [ARCHITECTURE.md](https://github.com/aws-samples/sample-agentic-ai-acceleration-kr/blob/main/projects/awsome-ai-gateway/ARCHITECTURE.md) |
+| **AWS 리소스 · 비용 추정** | [`resource-list.md`](resource-list.md) |
 | installer · uninstaller 상세 | [`deployment/ecs/installer.md`](deployment/ecs/installer.md) |
 | ECS ADR · 시크릿 | [`ecs-apigateway/`](deployment/docs/ecs-apigateway/) · [`secrets-contract.md`](deployment/docs/secrets-contract.md) |
 | 격리 컨테이너 | [`gateway-clients/README.md`](gateway-clients/README.md) |
