@@ -1,0 +1,6 @@
+# Local state / secrets (do not commit)
+.state-*.json
+config.yaml
+__pycache__/
+*.pyc
+.pytest_cache/

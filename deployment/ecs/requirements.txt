@@ -1,0 +1,6 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+#
+# ECS installer dependencies (stdlib + boto3/PyYAML).
+boto3>=1.34,<2
+PyYAML>=6.0,<7
+botocore>=1.34,<2

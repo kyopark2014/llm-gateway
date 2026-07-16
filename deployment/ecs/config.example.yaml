@@ -1,0 +1,82 @@
+# Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
+#
+# LLM Gateway installer config (boto3 — Terraform 대체)
+#
+#   cp config.example.yaml config.yaml
+#   python3 installer.py deploy -c config.yaml
+#
+# provisionDataPlane: true → VPC/Aurora/Valkey/Cognito 생성(없으면)
+# autoDiscover: true → 이미 있으면 조회만
+
+project: llm-gateway
+environment: dev
+provisionDataPlane: true
+autoDiscover: true
+
+vpcCidr: "10.50.0.0/16"
+# azs: []   # 비우면 리전에서 자동 선택 (2 AZ)
+
+global:
+  environment: dev
+  deploymentMode: ecs-fargate
+
+ecrRegistry: ""  # deploy 시 account.dkr.ecr.region 자동
+
+# 비워 두면 provision/discover 가 채움
+infrastructure:
+  vpcId: ""
+  privateSubnetIds: []
+  publicSubnetIds: []
+  dbHost: ""
+  dbPort: 5432
+  dbName: gateway
+  dbUser: gateway
+  dbSecretArn: ""
+  dbMasterSecretArn: ""
+  redisHost: ""
+  redisPort: 6379
+  redisTls: true
+  redisAuthSecretArn: ""
+  redisAuthSecretKey: ""
+  cognitoIssuerUrl: ""
+  cognitoUserPoolId: ""
+  cognitoUserPoolArn: ""
+  cognitoGroups:
+    - ClaudeAdmin
+
+# imageTags — must exist in ECR before services become healthy
+#   docker build --platform linux/amd64 -t $ECR/llm-gateway/gateway-proxy:<tag> ./gateway-proxy
+#   aws ecr get-login-password | docker login --username AWS --password-stdin $ECR
+#   docker push $ECR/llm-gateway/gateway-proxy:<tag>
+imageTags:
+  gatewayProxy: "1.0.48-websearch"
+  adminApi: "1.0.48-websearch"
+  adminUi: "1.0.97-brand"
+  costRecorderWorker: "1.0.47-websearch"
+  notificationWorker: "latest"
+  migration: "1.0.49-xacct"
+
+gatewayProxy:
+  workers: 2
+  replicas: 1
+  autoscalingMax: 3
+
+adminApi:
+  devLoginEnabled: true
+
+aws:
+  region: ap-northeast-2
+  allowedIamRoles:
+    - Customer-Developer
+    - admin
+
+adminBootstrap:
+  emails:
+    - admin@example.com
+  groups:
+    - ClaudeAdmin
+
+agentcore:
+  gatewayUrl: ""
+  runtimeArn: ""
+  chatStagingBucket: ""
