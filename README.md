@@ -105,27 +105,31 @@ flowchart LR
 
 #### 2) ECS 워크로드
 
+위→아래: **ALB 서비스 → AgentCore → 내부 워커**. 같은 줄은 `direction LR`로 나란히 둡니다.
+
 ```mermaid
 flowchart TB
-  subgraph public [ALB-attached]
+  subgraph alb ["1. ALB-attached"]
+    direction LR
     GW[gateway-proxy]
-    API[admin-api]
     UI[admin-ui]
+    API[admin-api]
   end
 
-  subgraph private [No public edge]
+  subgraph ext ["2. Outside ECS"]
+    AC[AgentCore chat-agent]
+  end
+
+  subgraph priv ["3. No public edge"]
+    direction LR
     SCH[scheduler]
     CR[cost-recorder-worker]
     NW[notification-worker]
     MIG[migration RunTask]
   end
 
-  subgraph external [Outside ECS]
-    AC[AgentCore chat-agent]
-  end
-
-  UI -.->|admin-api.llm-gateway.local| API
-  API -.->|InvokeAgentRuntime| AC
+  UI -->|Cloud Map| API
+  API -->|InvokeAgentRuntime| AC
 ```
 
 | 서비스 | 역할 |
