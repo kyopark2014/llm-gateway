@@ -2,8 +2,7 @@
 
 > ⚠️ **샘플/프로토타입.** 프로덕션 사용 전 보안·하드닝 검토 필요.
 
-EKS 기반 [**aws-samples / awsome-ai-gateway**](https://github.com/aws-samples/sample-agentic-ai-acceleration-kr/tree/main/projects/awsome-ai-gateway) 를  
-**ECS Fargate + boto3 installer** 로 전환한 변형본입니다.
+EKS 기반 [**aws-samples / awsome-ai-gateway**](https://github.com/aws-samples/sample-agentic-ai-acceleration-kr/tree/main/projects/awsome-ai-gateway)를  **ECS Fargate + boto3 installer** 로 전환한 변형본입니다.
 
 | | |
 |--|--|
