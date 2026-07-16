@@ -990,7 +990,7 @@ curl -s "$ADMIN_API_URL/health"
 | **EIP / 데이터 전송** | NAT EIP + ALB→인터넷 소량 | **~$4–10** |
 | **합계 (인프라)** | | **약 $310–410 / 월** |
 
-저트래픽 개발·데모 기준 ~$340/월 전후가 현실적입니다.  
+저트래픽 개발·데모 기준 $340/월 전후가 현실적입니다.  
 [resource-list.md](resource-list.md)의 밴드(~$310–410)와 비교하면, Fargate 4 vCPU를 풀로 돌리는 현재 구성은 그 밴드의 중하단~중앙에 해당합니다.  
 단일 LiteLLM 스택(~$85/월) 대비 약 4배 수준이며, 차이의 대부분은 NAT + ALB×3 + Aurora + Valkey + Fargate 다중 서비스입니다.
 
