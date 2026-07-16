@@ -4,7 +4,7 @@
 Claude Code 와 Codex 를 쓰는 전체 순서. 위에서부터 한 줄씩 복붙하면 된다.
 
 > **Cowork 제외**: Cowork 는 macOS 데스크톱 GUI 앱이라 컨테이너(헤드리스) 불가. 여기선 CLI 인
-> claude-code / codex 둘만 다룬다. (Cowork 는 데스크톱 앱 config — [`client-guide.md`](../client-guide.md) §7 참고)
+> claude-code / codex 둘만 다룬다. (Cowork 는 데스크톱 앱 config — [README §8.7](../README.md#87-cowork) 참고)
 
 ---
 

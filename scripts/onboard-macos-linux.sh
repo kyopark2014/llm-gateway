@@ -3,7 +3,7 @@
 #
 # LLM Gateway 온보딩 (macOS / Linux) — gateway-cli 설치 + OIDC 로그인 + (선택) Claude Code 연동.
 # 세 클라이언트(Claude Code/Codex/Cowork) 공통의 "1단계"를 자동화한다. Codex/Cowork 별 설정은
-# client-guide.md §6/§7 참고.
+# README.md §8.6/§8.7 (Codex/Cowork) 참고.
 #
 # 사용:
 #   OIDC_ISSUER_URL=... OIDC_CLIENT_ID=... ADMIN_API_URL=... ANTHROPIC_BASE_URL=... \
@@ -59,5 +59,5 @@ if [ "$SETUP_CC" = "1" ]; then
   log "완료. Claude Code 재시작 후 'claude' 실행하면 게이트웨이로 갑니다. 원복: gateway-cli disable"
 else
   log "공통 1단계(로그인) 완료. Claude Code 자동연동을 원하면 --setup-claude-code 로 재실행."
-  log "Codex/Cowork 는 client-guide.md §6/§7 참고 (VK 는 exchange 스니펫으로 발급)."
+  log "Codex/Cowork 는 README.md §8.6/§8.7 참고 (VK 는 exchange 스니펫으로 발급)."
 fi

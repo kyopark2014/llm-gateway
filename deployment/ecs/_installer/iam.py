@@ -197,11 +197,21 @@ def ensure_roles(cfg: InstallConfig, state: State) -> dict[str, str]:
             "Resource": [pool_arn],
         })
     if cfg.agentcore_runtime_arn:
+        rt = cfg.agentcore_runtime_arn.rstrip("/")
         api_stmts.append({
             "Sid": "AgentCoreRuntime",
             "Effect": "Allow",
-            "Action": ["bedrock-agentcore:InvokeAgentRuntime"],
-            "Resource": [cfg.agentcore_runtime_arn],
+            "Action": [
+                "bedrock-agentcore:InvokeAgentRuntime",
+                "bedrock-agentcore:InvokeAgentRuntimeWithWebSocketStream",
+            ],
+            # Invoke targets runtime-endpoint/DEFAULT under the runtime ARN.
+            "Resource": [
+                rt,
+                f"{rt}/*",
+                f"{rt}/runtime-endpoint/*",
+                f"arn:aws:bedrock-agentcore:{cfg.region}:{acct}:runtime/*",
+            ],
         })
     if cfg.chat_staging_bucket:
         bucket_arn = f"arn:aws:s3:::{cfg.chat_staging_bucket}"

@@ -7,7 +7,7 @@
 #   - Aurora 는 docker-entrypoint-initdb.d 메커니즘 없음 → 이 스크립트가 직접 수행.
 #   - DB_MASTER_URL (master user 권한) 필수.
 #   - APP_DB_USER/APP_DB_PASSWORD 제공 시 application user 생성/업데이트 + 모든 schema 에 GRANT.
-#   - 순서: init/*.sql 실행 → application user 처리 → alembic upgrade head.
+#   - 순서: init/*.sql 실행 → application user 처리 → alembic upgrade head → GRANT 재적용.
 #   - 모든 SQL 은 idempotent (IF NOT EXISTS / ON CONFLICT / DO IF NOT EXISTS) — 재실행 안전.
 #
 # DB_MASTER_URL 이 없으면 init SQL / GRANT 를 건너뛰고 alembic upgrade 만 수행.
@@ -19,7 +19,19 @@ set -e
 MASTER_URL="${DB_MASTER_URL:-}"
 APP_USER="${APP_DB_USER:-}"
 APP_PASSWORD="${APP_DB_PASSWORD:-}"
-SCHEMAS="auth model budget usage audit notification public"
+# chat_agent: BI Insight sessions/messages — GRANT 누락 시 admin-api 500
+SCHEMAS="auth model budget usage audit notification chat_agent public"
+
+grant_app_user() {
+    echo "[migration] granting privileges on schemas ($SCHEMAS) to '$APP_USER'"
+    for schema in $SCHEMAS; do
+        psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "GRANT USAGE, CREATE ON SCHEMA \"$schema\" TO \"$APP_USER\";"
+        psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA \"$schema\" TO \"$APP_USER\";"
+        psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA \"$schema\" TO \"$APP_USER\";"
+        psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA \"$schema\" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO \"$APP_USER\";"
+        psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA \"$schema\" GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO \"$APP_USER\";"
+    done
+}
 
 # psql용: password에 특수문자가 있으면 URL 파싱이 깨지므로 PGPASSWORD 환경변수 사용.
 # DB_MASTER_PASSWORD는 Secrets Manager / task env에서 주입됨.
@@ -49,16 +61,7 @@ DO \$\$ BEGIN
     END IF;
 END \$\$;
 EOSQL
-
-        echo "[migration] granting privileges on all schemas to '$APP_USER'"
-        for schema in $SCHEMAS; do
-            psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "GRANT USAGE, CREATE ON SCHEMA \"$schema\" TO \"$APP_USER\";"
-            psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA \"$schema\" TO \"$APP_USER\";"
-            psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA \"$schema\" TO \"$APP_USER\";"
-            psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA \"$schema\" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO \"$APP_USER\";"
-            psql "$MASTER_URL_NO_PASS" -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA \"$schema\" GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO \"$APP_USER\";"
-        done
-        echo "[migration]   privileges granted on schemas: $SCHEMAS"
+        grant_app_user
     else
         echo "[migration] WARNING: APP_DB_USER/APP_DB_PASSWORD 없음 — application user 처리 건너뜀"
     fi
@@ -68,4 +71,11 @@ fi
 
 echo "[migration] upgrading to head"
 alembic upgrade head
+
+# Alembic 이 만든 테이블(예: chat_agent.*) 에도 앱 유저 권한 부여.
+if [ -n "$MASTER_URL" ] && [ -n "$APP_USER" ] && [ -n "$APP_PASSWORD" ]; then
+    echo "[migration] re-granting privileges after alembic"
+    grant_app_user
+fi
+
 echo "[migration] done."

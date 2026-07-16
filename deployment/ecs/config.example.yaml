@@ -77,6 +77,10 @@ adminBootstrap:
     - ClaudeAdmin
 
 agentcore:
+  # WebSearch gateway (optional) — deployment/scripts/provision_agentcore_websearch.py
   gatewayUrl: ""
+  # BI Insight — after `python3 installer.py chat-agent -c config.yaml`
+  # or set enableChatAgent: true before deploy
+  enableChatAgent: false
   runtimeArn: ""
   chatStagingBucket: ""

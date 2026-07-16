@@ -1,7 +1,7 @@
 # Copyright 2026 © Amazon.com and Affiliates: This deliverable is considered Developed Content as defined in the AWS Service Terms.
 #
 # LLM Gateway 온보딩 (Windows PowerShell) — gateway-cli 확인 + OIDC 로그인 + (선택) Claude Code 연동.
-# 세 클라이언트 공통의 "1단계"를 자동화한다. Codex/Cowork 설정은 client-guide.md §6/§7 참고.
+# 세 클라이언트 공통의 "1단계"를 자동화한다. Codex/Cowork 설정은 README.md §8.6/§8.7 참고.
 #
 # 사용 (PowerShell):
 #   $env:OIDC_ISSUER_URL="..."; $env:OIDC_CLIENT_ID="..."; $env:ADMIN_API_URL="..."; $env:ANTHROPIC_BASE_URL="..."
@@ -52,5 +52,5 @@ if ($SetupClaudeCode) {
   Log "완료. Claude Code 재시작 후 claude 실행. 원복: gateway-cli disable"
 } else {
   Log "공통 1단계(로그인) 완료. Claude Code 자동연동은 -SetupClaudeCode 로 재실행."
-  Log "Codex/Cowork 는 client-guide.md §6/§7 참고. Cowork/대량배포는 운영자 MDM/.reg 권장."
+  Log "Codex/Cowork 는 README.md §8.6/§8.7 참고. Cowork/대량배포는 운영자 MDM/.reg 권장."
 }

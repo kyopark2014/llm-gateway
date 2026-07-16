@@ -2,9 +2,11 @@
 """Orchestrate deploy / status / migrate / destroy."""
 from __future__ import annotations
 
-from . import alb, apigw, iam, platform, services
+from pathlib import Path
+
+from . import alb, apigw, chat_agent, iam, platform, services
 from .config import InstallConfig
-from .dataplane import destroy_data_plane, ensure_data_plane
+from .dataplane import ensure_data_plane
 from .discover import discover_and_fill, format_discovered_yaml
 from .state import State
 from .util import fail, log
@@ -42,6 +44,12 @@ def deploy(cfg: InstallConfig, *, skip_migration: bool = False) -> State:
         services.run_migration(cfg, state)
     else:
         log("Skipping migration")
+
+    if cfg.enable_chat_agent:
+        log("enableChatAgent=true — provisioning BI chat AgentCore stack")
+        chat_agent.provision_chat_agent(cfg, state)
+        iam.ensure_roles(cfg, state)
+        services.refresh_admin_api(cfg, state)
 
     services.wait_services(cfg, state)
     _print_endpoints(state)
@@ -94,8 +102,46 @@ def migrate(cfg: InstallConfig) -> None:
     services.run_migration(cfg, state)
 
 
+def provision_chat(
+    cfg: InstallConfig,
+    config_path: str | None = None,
+    *,
+    skip_image_build: bool = False,
+) -> State:
+    """Provision BI Insight AgentCore runtime + lambdas; refresh admin-api."""
+    state = State(cfg.default_state_path())
+    if not state.data:
+        fail("No state — run deploy first")
+    if not cfg.agentcore_runtime_arn and state.get("agentcore_runtime_arn"):
+        cfg.agentcore_runtime_arn = state.get("agentcore_runtime_arn")
+    if not cfg.chat_staging_bucket and state.get("chat_staging_bucket"):
+        cfg.chat_staging_bucket = state.get("chat_staging_bucket")
+
+    out = chat_agent.provision_chat_agent(cfg, state, skip_image_build=skip_image_build)
+    if config_path:
+        chat_agent.patch_config_yaml(
+            Path(config_path),
+            runtime_arn=out["agentcore_runtime_arn"],
+            bucket=out["chat_staging_bucket"],
+        )
+    iam.ensure_roles(cfg, state)
+    # Only refresh admin-api (avoid rolling every service)
+    services.refresh_admin_api(cfg, state)
+    _print_endpoints(state)
+    print("\nBI chat AgentCore:")
+    print(f"  runtimeArn: {out.get('agentcore_runtime_arn')}")
+    print(f"  stagingBucket: {out.get('chat_staging_bucket')}")
+    return state
+
+
 def destroy_compute(cfg: InstallConfig, *, yes: bool = False, all_resources: bool = False) -> None:
-    """Delete ECS edge; with all_resources also delete data plane."""
+    """Delete ECS edge; with all_resources run full uninstall (prefer uninstaller.py)."""
+    if all_resources:
+        from .uninstall import uninstall
+
+        uninstall(cfg, yes=yes, keep_ecr=False, keep_state=False)
+        return
+
     if not yes and not cfg.dry_run:
         fail("Pass --yes to confirm destroy")
 
@@ -164,12 +210,10 @@ def destroy_compute(cfg: InstallConfig, *, yes: bool = False, all_resources: boo
         except Exception as e:  # noqa: BLE001
             log(f"Cluster: {e}")
 
-    if all_resources:
-        destroy_data_plane(cfg, state)
-        log("Full destroy complete (incl. data plane).")
-    else:
-        log("Compute destroy complete. Data plane kept. Use --all to remove VPC/DB/Redis/Cognito.")
-
+    log(
+        "Compute destroy complete. Data plane kept. "
+        "Use uninstaller.py --yes (or destroy --yes --all) for full teardown."
+    )
 
 def _print_endpoints(state: State) -> None:
     ep = state.endpoints()

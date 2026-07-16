@@ -12,7 +12,8 @@ Usage:
   python3 installer.py discover -c config.yaml           # 기존 리소스 조회
   python3 installer.py status|migrate -c config.yaml
   python3 installer.py destroy -c config.yaml --yes
-  python3 installer.py destroy -c config.yaml --yes --all   # + VPC/DB/Redis/Cognito
+  python3 installer.py destroy -c config.yaml --yes --all   # full teardown (= uninstaller.py)
+  # Prefer: python3 uninstaller.py -c config.yaml --yes
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from _installer.deploy import (  # noqa: E402
     discover,
     migrate,
     provision,
+    provision_chat,
     status,
 )
 from _installer.util import fail, log  # noqa: E402
@@ -40,11 +42,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "command",
-        choices=["deploy", "provision", "discover", "status", "migrate", "destroy"],
+        choices=[
+            "deploy",
+            "provision",
+            "discover",
+            "status",
+            "migrate",
+            "chat-agent",
+            "destroy",
+        ],
     )
     parser.add_argument("-c", "--config", required=True, help="YAML config path")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-migration", action="store_true")
+    parser.add_argument("--skip-image-build", action="store_true",
+                        help="chat-agent: require existing ECR image")
     parser.add_argument("--yes", action="store_true", help="Confirm destroy")
     parser.add_argument(
         "--all",
@@ -68,6 +80,10 @@ def main(argv: list[str] | None = None) -> int:
         status(cfg)
     elif args.command == "migrate":
         migrate(cfg)
+    elif args.command == "chat-agent":
+        provision_chat(
+            cfg, config_path=args.config, skip_image_build=args.skip_image_build
+        )
     elif args.command == "destroy":
         destroy_compute(cfg, yes=args.yes, all_resources=args.all_resources)
     else:

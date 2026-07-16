@@ -214,6 +214,8 @@ def _ensure_auth_secret(cfg, sm, create: bool = False, return_token: bool = Fals
 
 def destroy_redis(cfg: InstallConfig, state: State) -> None:
     cache = client("elasticache", cfg)
+    ec2 = client("ec2", cfg)
+    sm = client("secretsmanager", cfg)
     rg_id = f"{cfg.project}-{cfg.environment}"
     try:
         cache.delete_replication_group(ReplicationGroupId=rg_id, RetainPrimaryCluster=False)
@@ -226,3 +228,44 @@ def destroy_redis(cfg: InstallConfig, state: State) -> None:
                 break
     except ClientError as e:
         log(f"ElastiCache: {e}")
+
+    subnet_group = f"{rg_id}-redis"
+    try:
+        cache.delete_cache_subnet_group(CacheSubnetGroupName=subnet_group)
+        log(f"Deleted cache subnet group {subnet_group}")
+    except ClientError as e:
+        log(f"Cache subnet group: {e}")
+
+    sg_id = state.get("elasticache_sg_id")
+    vpc_id = state.get("vpc_id") or cfg.vpc_id
+    if not sg_id and vpc_id:
+        try:
+            found = ec2.describe_security_groups(
+                Filters=[
+                    {"Name": "group-name", "Values": [f"{rg_id}-elasticache"]},
+                    {"Name": "vpc-id", "Values": [vpc_id]},
+                ]
+            )["SecurityGroups"]
+            if found:
+                sg_id = found[0]["GroupId"]
+        except ClientError:
+            pass
+    if sg_id:
+        try:
+            ec2.delete_security_group(GroupId=sg_id)
+            log(f"Deleted ElastiCache SG {sg_id}")
+        except ClientError as e:
+            log(f"ElastiCache SG: {e}")
+
+    for secret_id in (
+        state.get("redis_auth_secret_arn"),
+        f"/{cfg.project}/{cfg.environment}/redis/auth_token",
+    ):
+        if not secret_id:
+            continue
+        try:
+            sm.delete_secret(SecretId=secret_id, ForceDeleteWithoutRecovery=True)
+            log(f"Deleted Redis secret {secret_id}")
+            break
+        except ClientError as e:
+            log(f"Redis secret: {e}")

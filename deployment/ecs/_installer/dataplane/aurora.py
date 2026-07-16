@@ -226,6 +226,8 @@ def _ensure_db_secret(cfg: InstallConfig, sm, state: State, create_password: boo
 
 def destroy_aurora(cfg: InstallConfig, state: State) -> None:
     rds = client("rds", cfg)
+    ec2 = client("ec2", cfg)
+    sm = client("secretsmanager", cfg)
     cluster_id = state.get("aurora_cluster_id") or f"{cfg.project}-{cfg.environment}"
     try:
         instances = rds.describe_db_instances().get("DBInstances") or []
@@ -252,3 +254,43 @@ def destroy_aurora(cfg: InstallConfig, state: State) -> None:
                 break
     except ClientError as e:
         log(f"Cluster: {e}")
+
+    subnet_group = f"{cluster_id}-aurora"
+    try:
+        rds.delete_db_subnet_group(DBSubnetGroupName=subnet_group)
+        log(f"Deleted DB subnet group {subnet_group}")
+    except ClientError as e:
+        log(f"DB subnet group: {e}")
+
+    sg_id = state.get("aurora_sg_id")
+    if not sg_id and cfg.vpc_id:
+        try:
+            found = ec2.describe_security_groups(
+                Filters=[
+                    {"Name": "group-name", "Values": [f"{cluster_id}-aurora"]},
+                    {"Name": "vpc-id", "Values": [cfg.vpc_id or state.get("vpc_id", "")]},
+                ]
+            )["SecurityGroups"]
+            if found:
+                sg_id = found[0]["GroupId"]
+        except ClientError:
+            pass
+    if sg_id:
+        try:
+            ec2.delete_security_group(GroupId=sg_id)
+            log(f"Deleted Aurora SG {sg_id}")
+        except ClientError as e:
+            log(f"Aurora SG: {e}")
+
+    for secret_id in (
+        state.get("db_secret_arn"),
+        f"/{cfg.project}/{cfg.environment}/db",
+    ):
+        if not secret_id:
+            continue
+        try:
+            sm.delete_secret(SecretId=secret_id, ForceDeleteWithoutRecovery=True)
+            log(f"Deleted DB secret {secret_id}")
+            break
+        except ClientError as e:
+            log(f"DB secret: {e}")

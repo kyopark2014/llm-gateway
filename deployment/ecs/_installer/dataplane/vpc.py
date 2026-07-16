@@ -240,6 +240,31 @@ def destroy_vpc(cfg: InstallConfig, state: State) -> None:
         except ClientError as e:
             log(f"RT: {e}")
 
+    # Non-default SGs (Aurora/Redis/ECS leftovers) block VPC delete
+    for sg in ec2.describe_security_groups(
+        Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+    ).get("SecurityGroups") or []:
+        if sg.get("GroupName") == "default":
+            continue
+        sg_id = sg["GroupId"]
+        try:
+            if sg.get("IpPermissions"):
+                ec2.revoke_security_group_ingress(
+                    GroupId=sg_id, IpPermissions=sg["IpPermissions"]
+                )
+        except ClientError:
+            pass
+        for attempt in range(6):
+            try:
+                ec2.delete_security_group(GroupId=sg_id)
+                log(f"Deleted SG {sg.get('GroupName')}={sg_id}")
+                break
+            except ClientError as e:
+                if attempt == 5:
+                    log(f"SG {sg_id}: {e}")
+                else:
+                    time.sleep(10)
+
     try:
         ec2.delete_vpc(VpcId=vpc_id)
         log(f"VPC deleted: {vpc_id}")

@@ -97,6 +97,11 @@ GRANT INSERT, UPDATE ON usage.roi_aggregations TO admin_api_user;
 GRANT USAGE ON SCHEMA audit TO admin_api_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA audit TO admin_api_user;
 
+-- chat_agent: BI Insight sessions / messages (admin-api)
+GRANT USAGE ON SCHEMA chat_agent TO admin_api_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA chat_agent TO admin_api_user;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA chat_agent TO admin_api_user;
+
 -- notification_worker_user: Used by U3 Notification Worker
 -- Reads: auth (recipient lookup), notification (config/log)
 -- Writes: notification (delivery log)
@@ -130,3 +135,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA budget GRANT SELECT, INSERT, UPDATE, DELETE O
 ALTER DEFAULT PRIVILEGES IN SCHEMA model  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO admin_api_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA audit  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO admin_api_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA usage  GRANT SELECT ON TABLES TO admin_api_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA chat_agent GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO admin_api_user;

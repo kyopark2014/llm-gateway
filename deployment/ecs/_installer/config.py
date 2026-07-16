@@ -17,6 +17,7 @@ class ImageTags:
     cost_recorder_worker: str = "latest"
     notification_worker: str = "latest"
     migration: str = "latest"
+    admin_chat_agent: str = "0.1.1-arm64"
 
 
 @dataclass
@@ -82,6 +83,7 @@ class InstallConfig:
     agentcore_gateway_url: str = ""
     agentcore_runtime_arn: str = ""
     chat_staging_bucket: str = ""
+    enable_chat_agent: bool = False
 
     state_file: str = ""
     dry_run: bool = False
@@ -147,6 +149,9 @@ def _tags(raw: dict[str, Any]) -> ImageTags:
             raw.get("notificationWorker") or raw.get("notification_worker") or "latest"
         ),
         migration=str(raw.get("migration") or "latest"),
+        admin_chat_agent=str(
+            raw.get("adminChatAgent") or raw.get("admin_chat_agent") or "0.1.1-arm64"
+        ),
     )
 
 
@@ -253,6 +258,9 @@ def load_config(path: str | Path, *, dry_run: bool = False) -> InstallConfig:
         agentcore_runtime_arn=str(agent.get("runtimeArn") or agent.get("runtime_arn") or ""),
         chat_staging_bucket=str(
             agent.get("chatStagingBucket") or agent.get("chat_staging_bucket") or ""
+        ),
+        enable_chat_agent=bool(
+            agent.get("enableChatAgent") or agent.get("enable_chat_agent") or False
         ),
         state_file=str(data.get("stateFile") or data.get("state_file") or ""),
         dry_run=dry_run,

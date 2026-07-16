@@ -138,8 +138,13 @@ export ADMIN_API_URL=<api_gateway_endpoint>   # https://....execute-api....amazo
 ### 6. 삭제
 
 ```bash
-python3 installer.py destroy -c config.yaml --yes          # ECS 엣지
-python3 installer.py destroy -c config.yaml --yes --all    # + VPC/DB/Redis/Cognito
+# 전체 스택 (권장) — ECS + 데이터 플레인 + IAM/SG/Cloud Map/ECR/chat-agent
+python3 uninstaller.py -c config.yaml --yes
+python3 uninstaller.py -c config.yaml --yes --keep-ecr   # 이미지는 유지
+
+# 또는 installer 경유
+python3 installer.py destroy -c config.yaml --yes          # ECS 엣지만
+python3 installer.py destroy -c config.yaml --yes --all    # = uninstaller.py
 ```
 
 ---
@@ -320,11 +325,12 @@ gateway-proxy: desired < max 이면 CPU 70% target tracking.
 
 ---
 
-## destroy
+## destroy / uninstaller
 
-| 삭제 (`--yes`) | `--all` 추가 | 유지 |
-|----------------|--------------|------|
-| ECS services, Cluster | Cognito, Redis, Aurora, VPC/NAT/EIP | IAM roles, app secret, Cloud Map, log group, SG (수동) |
+| 도구 | 삭제 범위 |
+|------|-----------|
+| `installer.py destroy --yes` | ECS services, ALB, API GW, Cluster |
+| `uninstaller.py --yes` / `destroy --yes --all` | 위 + Cognito/Redis/Aurora/VPC + IAM/SG/Cloud Map/logs/secrets/ECR/chat-agent |
 
 ---
 
@@ -332,7 +338,7 @@ gateway-proxy: desired < max 이면 CPU 70% target tracking.
 
 ```
 deployment/ecs/
-├── installer.py
+├── installer.py / uninstaller.py
 ├── config.example.yaml / config.yaml   # config.yaml은 gitignore 권장
 ├── requirements.txt
 ├── .state-<env>.json                   # gitignore
@@ -340,7 +346,8 @@ deployment/ecs/
     ├── config.py · state.py · util.py · discover.py
     ├── dataplane/   # vpc · aurora · redis · cognito
     ├── iam.py · platform.py · alb.py · apigw.py · services.py
+    ├── chat_agent.py · uninstall.py
     └── deploy.py
 ```
 
-관련: [docs/ecs-apigateway/](../docs/ecs-apigateway/) (ADR·토폴로지) · [config.example.yaml](config.example.yaml) · [secrets-contract](../docs/secrets-contract.md)
+관련: [README §클라이언트 연동](../../README.md#클라이언트-연동) · [docs/ecs-apigateway/](../docs/ecs-apigateway/) (ADR·토폴로지) · [config.example.yaml](config.example.yaml) · [secrets-contract](../docs/secrets-contract.md)

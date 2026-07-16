@@ -283,7 +283,7 @@ def ensure_services(cfg: InstallConfig, state: State) -> dict[str, str]:
             "logConfiguration": _log_config(cfg, "admin-api"),
             "healthCheck": {
                 "command": ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
-                "interval": 30, "timeout": 5, "retries": 3, "startPeriod": 60,
+                "interval": 30, "timeout": 5, "retries": 5, "startPeriod": 120,
             },
         },
     )
@@ -444,6 +444,75 @@ def ensure_services(cfg: InstallConfig, state: State) -> dict[str, str]:
     state.update(out)
     state.save()
     return out
+
+
+def refresh_admin_api(cfg: InstallConfig, state: State) -> str:
+    """Re-register admin-api task def (AGENTCORE_RUNTIME_ARN etc.) and force deploy."""
+    ecs = client("ecs", cfg)
+    app_secret = state.get("app_secret_arn")
+    exec_role = state.get("execution_role_arn")
+    api_role = state.get("admin_api_task_role_arn")
+    cluster = state.get("cluster_name") or cfg.cluster_name
+    tasks_sg = state.get("tasks_sg_id")
+    common = _common_env(cfg)
+    secrets = _common_secrets(cfg, app_secret)
+    reg = cfg.ecr_registry
+    tags_img = cfg.image_tags
+    prefix = cfg.name_prefix
+
+    api_td = _register_task(
+        ecs, cfg,
+        family=f"{prefix}-admin-api", cpu="1024", memory="2048",
+        task_role_arn=api_role, execution_role_arn=exec_role,
+        container={
+            "name": "admin-api",
+            "image": f"{reg}/{cfg.project}/admin-api:{tags_img.admin_api}",
+            "essential": True,
+            "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
+            "environment": common + [
+                {"name": "DEV_LOGIN_ENABLED", "value": "true" if cfg.dev_login_enabled else "false"},
+                {"name": "COGNITO_USER_POOL_ID", "value": cfg.cognito_user_pool_id},
+                {"name": "COGNITO_REGION", "value": cfg.region},
+                {"name": "COGNITO_SYNC_DEACTIVATE_MISSING", "value": "true"},
+                {"name": "OIDC_ISSUER_URL", "value": cfg.cognito_issuer_url},
+                {"name": "OIDC_AUDIENCE", "value": ""},
+                {"name": "OIDC_PROVIDER_NAME", "value": "oidc:cognito"},
+                {"name": "OIDC_GROUPS_CLAIM", "value": "cognito:groups"},
+                {"name": "OIDC_GROUP_PREFIX", "value": "Claude_"},
+                {"name": "OIDC_REJECT_UNMATCHED_GROUPS", "value": "true"},
+                {"name": "OIDC_VK_TTL_HOURS", "value": "1"},
+                {"name": "ADMIN_EMAILS", "value": ",".join(cfg.admin_bootstrap_emails)},
+                {"name": "ADMIN_GROUPS", "value": ",".join(cfg.admin_bootstrap_groups)},
+                {"name": "AGENTCORE_REGION", "value": cfg.region},
+                {"name": "AGENTCORE_RUNTIME_ARN", "value": cfg.agentcore_runtime_arn},
+                {"name": "CHAT_STAGING_BUCKET", "value": cfg.chat_staging_bucket},
+            ],
+            "secrets": secrets,
+            "logConfiguration": _log_config(cfg, "admin-api"),
+            "healthCheck": {
+                "command": ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
+                "interval": 30, "timeout": 5, "retries": 5, "startPeriod": 120,
+            },
+        },
+    )
+    _ensure_service(
+        ecs, cfg, service_name=f"{prefix}-admin-api", cluster=cluster,
+        task_def_arn=api_td, desired=1,
+        subnet_ids=cfg.private_subnet_ids, sg_id=tasks_sg,
+        tg_arn=state.get("admin_api_tg_arn"), container_name="admin-api", container_port=8080,
+        registry_arn=state.get("admin_api_service_arn"),
+    )
+    state.set("admin_api_task_def", api_td)
+    state.save()
+    if not cfg.dry_run:
+        try:
+            ecs.update_service(
+                cluster=cluster, service=f"{prefix}-admin-api", forceNewDeployment=True
+            )
+            log("Forced new deployment: admin-api")
+        except ClientError as e:
+            log(f"WARNING: force deploy admin-api: {e}")
+    return api_td
 
 
 def run_migration(cfg: InstallConfig, state: State) -> None:
