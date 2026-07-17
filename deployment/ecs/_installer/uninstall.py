@@ -37,7 +37,7 @@ def uninstall(
     _destroy_ecs_cluster(cfg, state)
     _destroy_cloudmap(cfg, state)
     _destroy_log_group(cfg, state)
-    _destroy_compute_security_groups(cfg, state)
+    # SGs deleted after data plane — Lambda ENIs / ALB ENIs must be gone first
     _destroy_iam_roles(cfg, state)
     _destroy_app_secret(cfg, state)
 
@@ -48,6 +48,10 @@ def uninstall(
         if not cfg.vpc_id and state.get("vpc_id"):
             cfg.vpc_id = state.get("vpc_id")
         destroy_data_plane(cfg, state)
+        # Retry ECS SGs after VPC ENI cleanup inside destroy_vpc
+        _destroy_compute_security_groups(cfg, state)
+        # Final sweep if VPC still blocked
+        _final_vpc_sweep(cfg, state)
 
     if not keep_ecr:
         _destroy_ecr_repos(cfg)
@@ -200,7 +204,7 @@ def _destroy_albs_and_tgs(cfg: InstallConfig, state: State) -> None:
     # Target groups cannot be deleted while attached; wait for ALBs to go away
     if alb_arns:
         log("Waiting for ALBs to finish deleting…")
-        for _ in range(60):
+        for _ in range(90):
             remaining = []
             for arn in alb_arns:
                 try:
@@ -211,18 +215,29 @@ def _destroy_albs_and_tgs(cfg: InstallConfig, state: State) -> None:
             if not remaining:
                 break
             time.sleep(5)
+        # Extra settle time — listeners/rules can linger briefly after ALB vanishes
+        time.sleep(15)
 
     for key in ("gateway_tg_arn", "admin_ui_tg_arn", "admin_api_tg_arn"):
         arn = state.get(key)
         if not arn:
             continue
-        _safe(
-            f"TG {key}",
-            lambda a=arn, k=key: (
-                elbv2.delete_target_group(TargetGroupArn=a),
-                log(f"Deleted TG {k}"),
-            ),
-        )
+
+        def _del_tg(a: str = arn, k: str = key) -> None:
+            last_err: Exception | None = None
+            for attempt in range(12):
+                try:
+                    elbv2.delete_target_group(TargetGroupArn=a)
+                    log(f"Deleted TG {k}")
+                    return
+                except ClientError as e:
+                    last_err = e
+                    if e.response["Error"]["Code"] != "ResourceInUse":
+                        raise
+                    time.sleep(10)
+            raise RuntimeError(f"TG still in use after retries: {k}: {last_err}")
+
+        _safe(f"TG {key}", _del_tg)
 
 
 def _destroy_ecs_cluster(cfg: InstallConfig, state: State) -> None:
@@ -407,3 +422,79 @@ def _destroy_ecr_repos(cfg: InstallConfig) -> None:
             log(f"Deleted ECR repo {repo}")
 
         _safe(f"ECR {name}", _del)
+
+
+def _final_vpc_sweep(cfg: InstallConfig, state: State) -> None:
+    """Last-chance cleanup for ENIs / TGs / subnets / VPC left after main destroy."""
+    log("── final VPC sweep")
+    vpc_id = state.get("vpc_id") or cfg.vpc_id
+    if not vpc_id:
+        return
+    ec2 = client("ec2", cfg)
+    elbv2 = client("elbv2", cfg)
+    prefix = cfg.name_prefix
+
+    # Orphan target groups by name
+    try:
+        tgs = elbv2.describe_target_groups().get("TargetGroups") or []
+        for tg in tgs:
+            name = tg.get("TargetGroupName") or ""
+            if name.startswith(prefix):
+                try:
+                    elbv2.delete_target_group(TargetGroupArn=tg["TargetGroupArn"])
+                    log(f"Deleted leftover TG {name}")
+                except ClientError as e:
+                    log(f"TG {name}: {e}")
+    except ClientError as e:
+        log(f"TG sweep: {e}")
+
+    # Available ENIs in VPC (Lambda leftovers)
+    try:
+        enis = ec2.describe_network_interfaces(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+        ).get("NetworkInterfaces") or []
+        for eni in enis:
+            if eni.get("Status") != "available":
+                continue
+            eni_id = eni["NetworkInterfaceId"]
+            try:
+                ec2.delete_network_interface(NetworkInterfaceId=eni_id)
+                log(f"Deleted leftover ENI {eni_id}")
+            except ClientError as e:
+                log(f"ENI {eni_id}: {e}")
+    except ClientError as e:
+        log(f"ENI sweep: {e}")
+
+    time.sleep(5)
+
+    # Retry subnets / non-default SGs / VPC
+    for sn in ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("Subnets") or []:
+        try:
+            ec2.delete_subnet(SubnetId=sn["SubnetId"])
+            log(f"Deleted leftover subnet {sn['SubnetId']}")
+        except ClientError as e:
+            log(f"Subnet {sn['SubnetId']}: {e}")
+
+    for sg in ec2.describe_security_groups(
+        Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+    ).get("SecurityGroups") or []:
+        if sg.get("GroupName") == "default":
+            continue
+        try:
+            if sg.get("IpPermissions"):
+                ec2.revoke_security_group_ingress(
+                    GroupId=sg["GroupId"], IpPermissions=sg["IpPermissions"]
+                )
+        except ClientError:
+            pass
+        try:
+            ec2.delete_security_group(GroupId=sg["GroupId"])
+            log(f"Deleted leftover SG {sg.get('GroupName')}")
+        except ClientError as e:
+            log(f"SG {sg['GroupId']}: {e}")
+
+    try:
+        ec2.delete_vpc(VpcId=vpc_id)
+        log(f"VPC deleted (sweep): {vpc_id}")
+    except ClientError as e:
+        log(f"VPC sweep: {e}")

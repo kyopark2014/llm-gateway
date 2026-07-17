@@ -638,6 +638,10 @@ def destroy_chat_agent(cfg: InstallConfig, state: State) -> None:
         state.get("chat_get_schema_function") or f"{prefix}-chat-agent-get-schema",
     ):
         _delete_lambda(cfg, fn)
+        _delete_lambda_log_group(cfg, fn)
+
+    # Lambda VPC ENIs linger after function delete and block subnet/SG/VPC teardown
+    _purge_lambda_enis(cfg, state, prefix)
 
     bucket = state.get("chat_staging_bucket") or cfg.chat_staging_bucket
     if not bucket and acct:
@@ -655,6 +659,49 @@ def destroy_chat_agent(cfg: InstallConfig, state: State) -> None:
     _delete_secret(cfg, reader)
 
     # ECR for chat-agent is removed with other ECR repos in uninstall
+
+
+def _purge_lambda_enis(cfg: InstallConfig, state: State, prefix: str) -> None:
+    """Delete leftover Lambda hyperplane ENIs in the installer VPC."""
+    vpc_id = state.get("vpc_id") or cfg.vpc_id
+    if not vpc_id:
+        return
+    ec2 = client("ec2", cfg)
+    markers = (
+        f"{prefix}-chat-agent-query-db",
+        f"{prefix}-chat-agent-get-schema",
+        "AWS Lambda VPC ENI",
+    )
+    log("Waiting for Lambda VPC ENIs to detach…")
+    for _ in range(36):  # up to ~3 min
+        enis = ec2.describe_network_interfaces(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+        ).get("NetworkInterfaces") or []
+        targets = [
+            e for e in enis
+            if any(m in (e.get("Description") or "") for m in markers)
+            or (e.get("RequesterId") or "").startswith("amazon-lambda")
+            or (e.get("InterfaceType") == "lambda")
+        ]
+        if not targets:
+            return
+        still = []
+        for eni in targets:
+            eni_id = eni["NetworkInterfaceId"]
+            status = eni.get("Status")
+            if status == "in-use":
+                still.append(eni_id)
+                continue
+            try:
+                ec2.delete_network_interface(NetworkInterfaceId=eni_id)
+                log(f"Deleted Lambda ENI {eni_id}")
+            except ClientError as e:
+                log(f"ENI {eni_id}: {e}")
+                still.append(eni_id)
+        if not still:
+            return
+        time.sleep(5)
+    log("WARNING: some Lambda ENIs may still remain — VPC delete may fail")
 
 
 def _delete_agent_runtime(cfg: InstallConfig, runtime_arn: str) -> None:
@@ -692,13 +739,32 @@ def _delete_agent_runtime(cfg: InstallConfig, runtime_arn: str) -> None:
 def _delete_lambda(cfg: InstallConfig, name: str) -> None:
     lam = client("lambda", cfg)
     try:
+        # Detach from VPC first so ENIs release faster
+        try:
+            lam.update_function_configuration(
+                FunctionName=name,
+                VpcConfig={"SubnetIds": [], "SecurityGroupIds": []},
+            )
+            time.sleep(3)
+        except ClientError:
+            pass
         lam.delete_function(FunctionName=name)
         log(f"Deleted Lambda {name}")
-        # VPC ENIs linger briefly
         time.sleep(2)
     except ClientError as e:
         if e.response["Error"]["Code"] != "ResourceNotFoundException":
             log(f"Lambda {name}: {e}")
+
+
+def _delete_lambda_log_group(cfg: InstallConfig, name: str) -> None:
+    logs = client("logs", cfg)
+    lg = f"/aws/lambda/{name}"
+    try:
+        logs.delete_log_group(logGroupName=lg)
+        log(f"Deleted log group {lg}")
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ResourceNotFoundException":
+            log(f"Log group {lg}: {e}")
 
 
 def _empty_and_delete_bucket(cfg: InstallConfig, bucket: str) -> None:

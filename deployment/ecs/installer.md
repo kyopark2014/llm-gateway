@@ -332,6 +332,8 @@ gateway-proxy: desired < max 이면 CPU 70% target tracking.
 | `installer.py destroy --yes` | ECS services, ALB, API GW, Cluster |
 | `uninstaller.py --yes` / `destroy --yes --all` | 위 + Cognito/Redis/Aurora/VPC + IAM/SG/Cloud Map/logs/secrets/ECR/chat-agent |
 
+**보강 (잔여 방지):** Lambda VPC ENI 정리, ALB 삭제 후 TG 재시도, VPC 삭제 전 ENI/서브넷/SG final sweep.
+
 ---
 
 ## 모듈 맵

@@ -211,7 +211,7 @@ def destroy_vpc(cfg: InstallConfig, state: State) -> None:
         except ClientError as e:
             log(f"EIP: {e}")
 
-    # Detach/delete IGW, subnets, RTs, VPC — best effort
+    # Detach/delete IGW
     try:
         for igw in ec2.describe_internet_gateways(
             Filters=[{"Name": "attachment.vpc-id", "Values": [vpc_id]}]
@@ -222,11 +222,41 @@ def destroy_vpc(cfg: InstallConfig, state: State) -> None:
     except ClientError as e:
         log(f"IGW: {e}")
 
+    # Purge available ENIs (Lambda VPC leftovers block subnet delete)
+    for _ in range(24):
+        enis = ec2.describe_network_interfaces(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
+        ).get("NetworkInterfaces") or []
+        pending = False
+        for eni in enis:
+            eni_id = eni["NetworkInterfaceId"]
+            status = eni.get("Status")
+            if status == "in-use":
+                pending = True
+                continue
+            try:
+                ec2.delete_network_interface(NetworkInterfaceId=eni_id)
+                log(f"Deleted ENI {eni_id}")
+            except ClientError as e:
+                log(f"ENI {eni_id}: {e}")
+                pending = True
+        if not pending and not enis:
+            break
+        if not pending:
+            break
+        time.sleep(5)
+
     for sn in ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("Subnets") or []:
-        try:
-            ec2.delete_subnet(SubnetId=sn["SubnetId"])
-        except ClientError as e:
-            log(f"Subnet: {e}")
+        for attempt in range(6):
+            try:
+                ec2.delete_subnet(SubnetId=sn["SubnetId"])
+                log(f"Deleted subnet {sn['SubnetId']}")
+                break
+            except ClientError as e:
+                if attempt == 5:
+                    log(f"Subnet: {e}")
+                else:
+                    time.sleep(10)
 
     for rt in ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("RouteTables") or []:
         # skip main
