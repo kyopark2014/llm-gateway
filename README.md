@@ -25,7 +25,7 @@ EKS 기반 [**aws-samples / awsome-ai-gateway**](https://github.com/aws-samples/
 7. [디렉터리 맵](#디렉터리-맵)
 8. [클라이언트 연동](#클라이언트-연동)
    - [엔드포인트 · Admin UI](#81-엔드포인트-매핑-ecs)
-   - [gateway-cli / Claude Code / Codex / Cowork](#84-공통--gateway-cli-로그인)
+   - [gateway-cli / Claude Code / Codex / Cowork](#84-공통--gateway-cli-로그인) · [settings.json](#855-설정-파일--claudesettingsjson)
    - [원복 · FAQ · 트러블슈팅](#89-원복--faq)
    - [모델 선택](#812-모델-선택)
 9. [비용 검토](#비용-검토)
@@ -519,7 +519,7 @@ python3 installer.py chat-agent -c config.yaml
 ① 환경변수 4개 설정   ← installer status / state 에서
 ② gateway-cli 설치 + login   ← 세 클라이언트 공통
 ③ 클라이언트별 연동
-   · Claude Code → gateway-cli setup → claude
+   · Claude Code → login → ~/.claude/settings.json (apiKeyHelper) → claude
    · Codex       → ~/.codex/config.toml + GATEWAY_VK
    · Cowork      → 앱 config JSON (HTTPS 필수)
 ```
@@ -605,7 +605,42 @@ claude
 
 ### 8.5 Claude Code
 
-온보딩 스크립트 대신 수동으로 할 때, 또는 §8.4 이후 세부 설정이 필요할 때.
+셸에 `export ANTHROPIC_BASE_URL=…` 만 하고 `claude`를 켜면 **Anthropic `/login`** 을 요구합니다.  
+게이트웨이는 Cognito + Virtual Key(`apiKeyHelper`)로 인증하므로 아래 **순서를 지키세요.** Claude Code 안의 `/login`은 쓰지 않습니다.
+
+#### 권장 순서 (한눈에)
+
+| # | 단계 | 명령 / 결과 |
+|---|------|-------------|
+| 1 | 엔드포인트 4개 | `installer.py status` 값으로 `export` (§8.1.1) |
+| 2 | gateway-cli 설치 | `uv tool install --force --from ./gateway-cli gateway-cli` (≥ 0.1.1) |
+| 3 | Cognito 로그인 | `gateway-cli login --timeout 600 --redirect-port 8091` → `~/.gateway-cli/oidc-tokens.json` |
+| 4 | Claude 연동 | `gateway-cli setup --gateway-url "$ANTHROPIC_BASE_URL" --admin-api-url "$ADMIN_API_URL"` (sudo 가능) |
+| 5 | (또는) 개인 settings | `~/.claude/settings.json`에 `apiKeyHelper` + `env` 작성 (§8.5.5) |
+| 6 | VK 확인 | `api-key-helper` → stdout에 `vk-…` |
+| 7 | 실행 | Claude **완전 종료** 후 `claude` |
+
+```bash
+# 1–3
+export OIDC_ISSUER_URL="..."
+export OIDC_CLIENT_ID="..."
+export ADMIN_API_URL="..."          # API Gateway
+export ANTHROPIC_BASE_URL="..."     # gateway ALB
+export GATEWAY_CLI_GATEWAY_URL="$ADMIN_API_URL"
+
+uv tool install --force --from ./gateway-cli gateway-cli
+gateway-cli login --timeout 600 --redirect-port 8091
+
+# 4 (managed-settings — sudo)
+gateway-cli setup \
+  --gateway-url "$ANTHROPIC_BASE_URL" \
+  --admin-api-url "$ADMIN_API_URL"
+
+# 6–7
+api-key-helper   # vk-… 가 찍혀야 함
+# Claude 완전 종료 후
+claude
+```
 
 #### 8.5.1 gateway-cli 설치
 
@@ -626,7 +661,7 @@ uv tool install --force --from ./gateway-cli gateway-cli
 
 ```bash
 gateway-cli version    # 0.1.1 이상 (Cognito DNS 폴백)
-which api-key-helper
+which api-key-helper   # 예: ~/.local/bin/api-key-helper
 ```
 
 | 바이너리 | 역할 |
@@ -646,39 +681,80 @@ which api-key-helper
 #### 8.5.3 환경변수
 
 ```bash
-# ~/.zshrc 또는 ~/.bashrc
+# ~/.zshrc 또는 ~/.bashrc — gateway-cli / api-key-helper 용
 export OIDC_ISSUER_URL="..."
 export OIDC_CLIENT_ID="..."
 export ADMIN_API_URL="..."        # API Gateway (https://….execute-api…)
 export ANTHROPIC_BASE_URL="..."   # gateway ALB (http://….elb.amazonaws.com)
+export GATEWAY_CLI_GATEWAY_URL="$ADMIN_API_URL"
 
 source ~/.zshrc
 ```
 
-> 셸 변수는 `gateway-cli` / `api-key-helper`용.  
-> Claude Code 프로세스용 값은 다음 `setup`이 settings에 넣습니다.
+> 셸 `export`만으로는 Claude Code가 게이트웨이로 붙지 않습니다.  
+> Claude 프로세스용 값은 **`~/.claude/settings.json`의 `env` + `apiKeyHelper`**(또는 managed-settings)에 있어야 합니다.
 
 #### 8.5.4 OIDC 로그인
 
-권장 (Sign up·이메일 확인 여유 + 8090 점유 회피):
-
 ```bash
 gateway-cli login --timeout 600 --redirect-port 8091
-# 또는 명시적으로:
-gateway-cli login \
-  --issuer-url "$OIDC_ISSUER_URL" \
-  --client-id "$OIDC_CLIENT_ID" \
-  --timeout 600 \
-  --redirect-port 8091
 ```
 
 1. 브라우저에서 Cognito **Sign in** (최초만 Sign up → 이메일 확인)  
 2. `http://localhost:8091/callback` 으로 돌아오면 성공  
-3. 터미널에 `Login successful` (토큰 → `~/.gateway-cli/oidc-tokens.json`, 권한 `0600`)
+3. 터미널에 `Login successful` (토큰 → `~/.gateway-cli/oidc-tokens.json`)
 
 `oidc_dns_fallback` warning JSON이 나와도 **`Login successful`이면 정상** (§8.4 참고).
 
-#### 8.5.5 Claude Code 연동 (`setup`)
+#### 8.5.5 설정 파일 — `~/.claude/settings.json`
+
+실제 Claude Code CLI가 읽는 개인 설정은 **`~/.claude/settings.json`** 입니다.  
+`gateway-cli setup`이 성공하면 managed 쪽에도 쓰이지만, **sudo 없이** 쓰려면 아래처럼 직접 작성하면 됩니다.
+
+```json
+{
+  "apiKeyHelper": "/Users/<you>/.local/bin/api-key-helper",
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://llm-gateway-<env>-gw-….elb.amazonaws.com",
+    "GATEWAY_CLI_GATEWAY_URL": "https://….execute-api.<region>.amazonaws.com",
+    "ADMIN_API_URL": "https://….execute-api.<region>.amazonaws.com",
+    "OIDC_ISSUER_URL": "https://cognito-idp.<region>.amazonaws.com/<user_pool_id>",
+    "OIDC_CLIENT_ID": "<cognito_app_client_id>"
+  },
+  "model": "opus[1m]"
+}
+```
+
+| 키 | 설명 |
+|----|------|
+| `apiKeyHelper` | **절대 경로** 권장 (`which api-key-helper`). Claude가 매 요청 VK를 이 프로세스로 받음 |
+| `env.ANTHROPIC_BASE_URL` | gateway **ALB** (추론 / SSE) |
+| `env.ADMIN_API_URL` / `GATEWAY_CLI_GATEWAY_URL` | **API Gateway** (VK exchange). 둘 다 같은 URL로 두어도 됨 |
+| `env.OIDC_*` | Cognito IdP (helper가 토큰 갱신 시 사용) |
+| `model` | 선택. `/model`로도 변경 가능 |
+
+생성 예시:
+
+```bash
+HELPER="$(which api-key-helper)"
+cat > ~/.claude/settings.json <<EOF
+{
+  "apiKeyHelper": "${HELPER}",
+  "env": {
+    "ANTHROPIC_BASE_URL": "${ANTHROPIC_BASE_URL}",
+    "GATEWAY_CLI_GATEWAY_URL": "${ADMIN_API_URL}",
+    "ADMIN_API_URL": "${ADMIN_API_URL}",
+    "OIDC_ISSUER_URL": "${OIDC_ISSUER_URL}",
+    "OIDC_CLIENT_ID": "${OIDC_CLIENT_ID}"
+  },
+  "model": "sonnet"
+}
+EOF
+```
+
+#### 8.5.6 `gateway-cli setup` (managed-settings, 선택)
+
+조직 PC에 공통으로 박을 때:
 
 ```bash
 gateway-cli setup \
@@ -686,64 +762,34 @@ gateway-cli setup \
   --admin-api-url "$ADMIN_API_URL"
 ```
 
-> macOS/Linux에서 `/etc/claude-code/managed-settings.d/` 기록 시 **sudo** 암호를 물을 수 있습니다.
+> `/etc/claude-code/managed-settings.d/` 기록 시 **sudo** 필요.  
+> managed와 `~/.claude/settings.json`이 **둘 다** 있으면 **managed가 우선**합니다.
 
-성공 시 예시:
+| 경로 | 용도 |
+|------|------|
+| `~/.claude/settings.json` | 개인 (권장·sudo 불필요) |
+| `/etc/claude-code/managed-settings.d/50-gateway.json` | 머신 공통 (setup) |
+| Windows managed | `C:\Program Files\ClaudeCode\managed-settings.d\50-gateway.json` |
 
-```
-  Gateway URL:     http://llm-gateway-<env>-gw-….elb.amazonaws.com
-  Admin API URL:   https://….execute-api.<region>.amazonaws.com
-  API Key Helper:  /usr/local/bin/api-key-helper
+성공 시 `gateway-cli status`에 `Gateway: [ON]` 과 Base URL / Admin API URL이 보입니다.
 
-  Gateway enabled: /etc/claude-code/managed-settings.d/50-gateway.json
-```
-
-| OS | 설정 경로 |
-|----|-----------|
-| macOS / Linux | `/etc/claude-code/managed-settings.d/50-gateway.json` (권장) 또는 `~/.config/Claude/settings.json` |
-| Windows | `C:\Program Files\ClaudeCode\managed-settings.d\50-gateway.json` |
-
-settings 핵심:
-
-```json
-{
-  "apiKeyHelper": "/usr/local/bin/api-key-helper",
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://….elb.amazonaws.com",
-    "ADMIN_API_URL": "https://….execute-api….amazonaws.com",
-    "OIDC_ISSUER_URL": "...",
-    "OIDC_CLIENT_ID": "..."
-  }
-}
-```
-
-#### 8.5.6 수동 settings (`setup` 실패 시)
+#### 8.5.7 확인 · 실행
 
 ```bash
-mkdir -p ~/.config/Claude
-cat > ~/.config/Claude/settings.json <<EOF
-{
-  "apiKeyHelper": "$(which api-key-helper)",
-  "env": {
-    "ANTHROPIC_BASE_URL": "${ANTHROPIC_BASE_URL}",
-    "ADMIN_API_URL": "${ADMIN_API_URL}",
-    "OIDC_ISSUER_URL": "${OIDC_ISSUER_URL}",
-    "OIDC_CLIENT_ID": "${OIDC_CLIENT_ID}"
-  }
-}
-EOF
-```
+api-key-helper          # stdout: vk-…  (실패 시 login 재실행 / 프록시 HTTP_PROXY 확인)
+gateway-cli status
 
-> managed-settings와 개인 settings가 **둘 다** 있으면 managed가 우선합니다.
-
-#### 8.5.7 Claude Code 실행
-
-```bash
 # Claude Code 완전 종료 후
 claude
 ```
 
-첫 요청: `apiKeyHelper` → API GW에서 VK 발급 → gateway ALB로 Messages API 호출.
+첫 요청: `apiKeyHelper` → API GW `/v1/auth/exchange` → VK → gateway ALB `/v1/messages`.
+
+| 증상 | 원인 | 해결 |
+|------|------|------|
+| `Not logged in · Please run /login` | `apiKeyHelper` 없음·실패, 또는 Anthropic 콘솔 모드 | §8.5.5 settings 확인. Claude **`/login` 금지** → `gateway-cli login` |
+| helper traceback / proxy 403 | `HTTP_PROXY`/`HTTPS_PROXY` | `unset HTTP_PROXY HTTPS_PROXY` 후 `api-key-helper` 재시도 |
+| settings 수정이 안 먹음 | managed가 덮어씀 | `gateway-cli status`로 managed 경로 확인 후 맞춤 |
 
 ---
 
