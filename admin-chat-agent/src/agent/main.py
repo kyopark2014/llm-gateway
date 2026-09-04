@@ -24,7 +24,7 @@ from pathlib import Path
 import structlog
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from strands import Agent, tool
-from strands.models import BedrockModel, CacheConfig
+from strands.models import BedrockModel, CacheConfig, CacheToolsConfig
 
 from agent import candidate_select
 from agent import fewshot
@@ -156,7 +156,8 @@ def _bedrock(
     프롬프트 캐싱(§54): cache_config="auto" + cache_tools 로 시스템프롬프트·tool
     정의·마지막 user 턴에 cachePoint 주입(Strands bedrock.py). orchestrator 는
     매 호출 system(4.8KB)+tools(5개 스키마)가 동일하므로 cache hit 시 TTFT 의
-    prefill 비용이 절감된다(Bedrock Claude 프롬프트 캐시, 5m TTL).
+    prefill 비용이 절감된다(Bedrock Claude 프롬프트 캐시, 1h TTL — ttl 미지정 시
+    Strands 기본값 5m이라 명시적으로 "1h"를 전달).
     """
     thinking: dict = {"type": "adaptive"}
     if stream_thinking:
@@ -169,8 +170,8 @@ def _bedrock(
         model_id=model_id,
         region_name=AWS_REGION,
         additional_request_fields=request_fields,
-        cache_config=CacheConfig(strategy="auto"),
-        cache_tools="default",
+        cache_config=CacheConfig(strategy="auto", ttl="1h"),
+        cache_tools=CacheToolsConfig(type="default", ttl="1h"),
     )
 
 
