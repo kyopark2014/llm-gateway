@@ -166,7 +166,14 @@ export function MessageBubble({ message, onPlanProceed, sessionId }: Props) {
             data-report-narrative
             className="text-sm text-foreground leading-relaxed [&_p]:my-1.5 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[12px] [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-3 [&_a]:text-primary [&_a]:underline [&_strong]:font-semibold [&_h1]:text-base [&_h1]:font-semibold [&_h1]:mt-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold"
           >
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{message.content}</ReactMarkdown>
+            <ReactMarkdown
+              // 6F~12F, 2~2.5처럼 범위에 쓰는 단일 ~ 는 그대로 둔다.
+              // 취소선은 ~~텍스트~~ 만 적용한다.
+              remarkPlugins={[[remarkGfm, { singleTilde: false }]]}
+              components={MD_COMPONENTS}
+            >
+              {message.content}
+            </ReactMarkdown>
             {message.pending && (
               <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground align-middle" />
             )}
